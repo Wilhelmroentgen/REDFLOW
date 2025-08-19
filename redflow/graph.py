@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, END
 from .utils.playbooks import load_playbook
 from .utils.io import new_run_id, save_json
 from .reporters.markdown import write_report
-from .utils.ui_registry import get_ui  # <-- NUEVO
+from .utils.ui_registry import get_ui
 
 
 class RFState(TypedDict, total=False):
@@ -70,8 +70,8 @@ def _snapshot_safe(run_id: str, name: str, state: RFState) -> None:
 
 def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
     async def _runner(state: RFState) -> RFState:
-        # Obtén UI directamente del registro global
-        ui = get_ui(state.get("run_id"))
+        # UI del registry; si no está, fallback a state["__ui"] por compatibilidad
+        ui = get_ui(state.get("run_id")) or state.get("__ui")  # type: ignore[assignment]
 
         # ---- nodo especial: reporte ----------------------------------------
         if impl == "report":
@@ -106,7 +106,6 @@ def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
             ui.start(node_id)
         try:
             new_state = await fn(state, **(params or {}))
-
             if ui:
                 ui.finish(node_id)      # finish ANTES del snapshot
             _snapshot_safe(state["run_id"], f"state_after_{node_id}", new_state)
