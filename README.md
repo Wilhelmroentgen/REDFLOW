@@ -1,9 +1,43 @@
 # RedFlow — Recon/Enum Orchestrator for Red Team (WIP v0.1)
 
+<!-- Core project status -->
 ![status](https://img.shields.io/badge/status-WIP-yellow)
 ![version](https://img.shields.io/badge/version-0.1-blue)
-![python](https://img.shields.io/badge/python-3.9%2B-3776AB)
+![python](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![license](https://img.shields.io/badge/license-MIT-green)
+
+<!-- Security domain / audience -->
+![red-team](https://img.shields.io/badge/Red%20Team-Toolkit-critical)
+![pentesting](https://img.shields.io/badge/Penetration_Testing-Tools-red)
+![osint](https://img.shields.io/badge/OSINT-Recon-orange)
+![offsec](https://img.shields.io/badge/Offensive%20Security-Automation-lightgrey)
+![recon](https://img.shields.io/badge/Recon-Playbook--Driven-blueviolet)
+![enum](https://img.shields.io/badge/Enumeration-Workflow-9cf)
+
+<!-- Tech stack / ecosystem -->
+![cli](https://img.shields.io/badge/CLI-Typer-0A7BBB)
+![graphs](https://img.shields.io/badge/Graphs-Matplotlib-11557c)
+![engine](https://img.shields.io/badge/Orchestrator-LangGraph-4b8bbe)
+![projectdiscovery](https://img.shields.io/badge/ProjectDiscovery-Tools-0080FF)
+![nmap](https://img.shields.io/badge/Nmap-Scan-2e6f40)
+![ffuf](https://img.shields.io/badge/FFUF-Fuzzing-6f42c1)
+![subfinder](https://img.shields.io/badge/Subfinder-Subs-0ea5e9)
+![httpx](https://img.shields.io/badge/httpx-Probing-0ea5e9)
+![dnsx](https://img.shields.io/badge/dnsx-Resolve-0ea5e9)
+![naabu](https://img.shields.io/badge/naabu-Ports-0ea5e9)
+![katana](https://img.shields.io/badge/katana-Crawl-0ea5e9)
+![gau](https://img.shields.io/badge/gau-URLs-0ea5e9)
+![arjun](https://img.shields.io/badge/arjun-Params-0ea5e9)
+![tlsx](https://img.shields.io/badge/tlsx-TLS-0ea5e9)
+![whatweb](https://img.shields.io/badge/whatweb-Fingerprint-0ea5e9)
+![wafw00f](https://img.shields.io/badge/wafw00f-WAF-0ea5e9)
+![gowitness](https://img.shields.io/badge/gowitness-Screenshots-0ea5e9)
+
+<!-- Platforms -->
+![kali](https://img.shields.io/badge/Kali-Linux-557C94?logo=kalilinux&logoColor=white)
+![debian](https://img.shields.io/badge/Debian-Supported-A81D33?logo=debian&logoColor=white)
+![ubuntu](https://img.shields.io/badge/Ubuntu-Supported-E95420?logo=ubuntu&logoColor=white)
+![macos](https://img.shields.io/badge/macOS-Supported-000000?logo=apple&logoColor=white)
 
 **RedFlow** is a playbook-driven CLI for reconnaissance (and early enumeration) on a **domain or IP**. It orchestrates well-known tools (`whois`, `amass`, `subfinder`, `assetfinder`, `dnsx`, `httpx`, `naabu`, `nmap`, `whatweb`, `wafw00f`, `gowitness`, `gau`, `katana`, `arjun`, `ffuf`, `tlsx`, `dig`) and produces **reproducible artifacts**, **charts**, and a **Markdown report**.
 
