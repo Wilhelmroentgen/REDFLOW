@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from .utils.playbooks import load_playbook
 from .utils.io import new_run_id, save_json
 from .reporters.markdown import write_report
+from .utils.ui_registry import get_ui  # <-- NUEVO
 
 
 class RFState(TypedDict, total=False):
@@ -50,9 +51,6 @@ class RFState(TypedDict, total=False):
     findings: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
 
-    # UI en vivo (inyectado por CLI)
-    __ui: Any
-
 
 def _resolve_impl(impl: str) -> Optional[Callable[..., Awaitable[RFState]]]:
     try:
@@ -64,9 +62,7 @@ def _resolve_impl(impl: str) -> Optional[Callable[..., Awaitable[RFState]]]:
 
 def _snapshot_safe(run_id: str, name: str, state: RFState) -> None:
     try:
-        sanitized: Dict[str, Any] = {
-            k: v for k, v in dict(state).items() if not str(k).startswith("__")
-        }
+        sanitized: Dict[str, Any] = {k: v for k, v in dict(state).items() if not str(k).startswith("__")}
         save_json(run_id, name, sanitized)
     except Exception:
         pass
@@ -74,7 +70,8 @@ def _snapshot_safe(run_id: str, name: str, state: RFState) -> None:
 
 def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
     async def _runner(state: RFState) -> RFState:
-        ui = state.get("__ui", None)
+        # Obtén UI directamente del registro global
+        ui = get_ui(state.get("run_id"))
 
         # ---- nodo especial: reporte ----------------------------------------
         if impl == "report":
@@ -110,10 +107,6 @@ def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
         try:
             new_state = await fn(state, **(params or {}))
 
-            # >>> re-adjunta __ui por si el nodo devolvió un dict nuevo
-            if ui is not None:
-                new_state["__ui"] = ui  # type: ignore[index]
-
             if ui:
                 ui.finish(node_id)      # finish ANTES del snapshot
             _snapshot_safe(state["run_id"], f"state_after_{node_id}", new_state)
@@ -122,9 +115,6 @@ def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
             state.setdefault("errors", []).append({
                 "node": node_id, "impl": impl, "exception": str(e),
             })
-            # Mantén el UI en el estado por si el nodo lo removió
-            if ui is not None:
-                state["__ui"] = ui  # type: ignore[index]
             if ui:
                 ui.fail(node_id, str(e))
             _snapshot_safe(state["run_id"], f"state_after_{node_id}_error", state)
