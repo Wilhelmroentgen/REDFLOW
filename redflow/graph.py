@@ -9,8 +9,9 @@ from .utils.playbooks import load_playbook
 from .utils.io import new_run_id, save_json
 from .reporters.markdown import write_report
 
+
 # ---------------------------------------------------------------------
-# Estado global del workflow (añade/quita campos según tus nodos)
+# Estado global del workflow (ajústalo según tus nodos)
 # ---------------------------------------------------------------------
 class RFState(TypedDict, total=False):
     run_id: str
@@ -27,7 +28,7 @@ class RFState(TypedDict, total=False):
 
     # Subdominios / DNS
     subdomains: List[str]
-    resolved: Dict[str, Dict[str, List[str]]]  # {"sub": {"A":[...], "AAAA":[...], "CNAME":[...]}}
+    resolved: Dict[str, Dict[str, List[str]]]  # {"sub": {"A":[...], "AAAA":[...], "CNAME":[...]} }
     alive_hosts: List[str]
     dns_surface: Dict[str, Any]      # dig outputs (spf, dkim, ns, axfr resultados)
 
@@ -54,6 +55,10 @@ class RFState(TypedDict, total=False):
     findings: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
 
+    # UI (inyectado por CLI si está disponible)
+    __ui: Any
+
+
 # ---------------------------------------------------------------------
 # Carga dinámica de implementaciones: .nodes.<impl>.run(state, **params)
 # Cada archivo en redflow/nodes/<impl>.py debe exponer: async def run(...)
@@ -70,51 +75,78 @@ def _resolve_impl(impl: str) -> Optional[Callable[..., Awaitable[RFState]]]:
     except Exception:
         return None
 
+
 def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
     """
     Envuelve cada nodo para:
+    - notificar al UI (start/finish/fail),
     - ejecutar la corrutina del nodo,
     - capturar errores,
     - guardar snapshots del estado tras cada paso,
-    - manejar el nodo 'report' como caso especial.
+    - manejar el nodo 'report' como caso especial (sin módulo).
     """
     async def _runner(state: RFState) -> RFState:
-        try:
-            # Nodo especial de reporte (no requiere módulo)
-            if impl == "report":
+        ui = state.get("__ui", None)
+
+        # Nodo especial de reporte (no requiere módulo)
+        if impl == "report":
+            if ui:
+                ui.start(node_id)
+            try:
                 write_report(state)
                 save_json(state["run_id"], "state_final", dict(state))
+                if ui:
+                    ui.finish(node_id)
                 return state
-
-            fn = _resolve_impl(impl)
-            if fn is None:
+            except Exception as e:
                 state.setdefault("errors", []).append({
                     "node": node_id,
                     "impl": impl,
-                    "error": "impl_not_found"
+                    "exception": str(e),
                 })
-                # Aún así guardamos snapshot para debug
-                save_json(state["run_id"], f"state_after_{node_id}", dict(state))
+                save_json(state["run_id"], f"state_after_{node_id}_error", dict(state))
+                if ui:
+                    ui.fail(node_id, str(e))
                 return state
 
-            # Ejecuta nodo real
+        # Nodo normal con implementación
+        fn = _resolve_impl(impl)
+        if fn is None:
+            # No existe impl -> registrar error, snapshot y avisar UI
+            err_msg = "impl_not_found"
+            state.setdefault("errors", []).append({
+                "node": node_id,
+                "impl": impl,
+                "error": err_msg
+            })
+            save_json(state["run_id"], f"state_after_{node_id}", dict(state))
+            if ui:
+                ui.fail(node_id, err_msg)
+            return state
+
+        # Ejecutar el nodo real
+        if ui:
+            ui.start(node_id)
+        try:
             new_state = await fn(state, **(params or {}))
-
-            # Guardar progreso
+            # Guardar progreso tras éxito
             save_json(state["run_id"], f"state_after_{node_id}", dict(new_state))
+            if ui:
+                ui.finish(node_id)
             return new_state
-
         except Exception as e:
             state.setdefault("errors", []).append({
                 "node": node_id,
                 "impl": impl,
                 "exception": str(e),
             })
-            # Snapshot tras el fallo
             save_json(state["run_id"], f"state_after_{node_id}_error", dict(state))
+            if ui:
+                ui.fail(node_id, str(e))
             return state
 
     return _runner
+
 
 # ---------------------------------------------------------------------
 # Construcción del grafo desde un playbook YAML
@@ -127,25 +159,31 @@ def build_graph_from_playbook(playbook_name: str, target: str):
     g = StateGraph(RFState)
 
     # Registrar nodos
-    for n in pb["nodes"]:
+    nodes = pb.get("nodes", [])
+    if not nodes:
+        raise ValueError("El playbook no define nodos.")
+
+    for n in nodes:
         node_id = n["id"]
         impl = n["impl"]
         params = n.get("params", {}) or {}
         g.add_node(node_id, _wrap_node(node_id, impl, params))
 
     # Entry y edges
-    if not pb["nodes"]:
-        raise ValueError("El playbook no define nodos.")
-    g.set_entry_point(pb["nodes"][0]["id"])
+    g.set_entry_point(nodes[0]["id"])
 
-    for e in pb["edges"]:
+    for e in pb.get("edges", []):
+        # Formato esperado: {from: <id>, to: <id>}
+        if not isinstance(e, dict) or "from" not in e or "to" not in e:
+            raise ValueError("Cada edge debe ser un objeto con claves 'from' y 'to'.")
         g.add_edge(e["from"], e["to"])
 
     # Asegura END tras el último nodo (por si el playbook no lo añade)
-    last_id = pb["nodes"][-1]["id"]
+    last_id = nodes[-1]["id"]
     g.add_edge(last_id, END)
 
     return g.compile()
+
 
 # ---------------------------------------------------------------------
 # Estado inicial por target
