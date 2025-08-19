@@ -1,70 +1,73 @@
-
----
-
-# playbooks/recon-full.yaml
-
-```yaml
 name: recon-full
+
 nodes:
   # 1) WHOIS / ASN
   - id: whois
     impl: whois
+
   - id: amass_asn
     impl: amass_intel
+    params:
+      max_orgs: 6
 
-  # 2) Subdominios
+  # 2) Subdomains
   - id: subfinder
     impl: subfinder
     params:
       all: true
       silent: true
+
   - id: assetfinder
     impl: assetfinder
+
   - id: merge_subs
     impl: merge_sort_unique
 
-  # 3) DNS resolución y superficie
-  - id: dnsx_resolve
+  # 3) DNS resolution & surface
+  - id: dnsx
     impl: dnsx
     params:
       resolver: "1.1.1.1"
+
   - id: dig_suite
     impl: dig_suite
 
-  # 4) HTTP y puertos
+  # 4) HTTP & ports
   - id: httpx
     impl: httpx
     params:
       jsonl: true
       include_title: true
       tech_detect: true
+
   - id: naabu
     impl: naabu
     params:
       top_ports: 100
       jsonl: true
+
   - id: nmap
     impl: nmap
     params:
       top_ports: 100
-      stealth: true
-      service_fp: true
-      treat_down_as_up: true
+      stealth: true           # use -sS if permitted; set false to use -sT
+      service_fp: true        # -sV
+      treat_down_as_up: true  # -Pn
 
-  # 5) Fingerprinting Web y WAF + screenshots
+  # 5) Web fingerprinting & WAF + screenshots
   - id: web_fp
     impl: whatweb_waf_gowitness
     params:
       gowitness_threads: 3
 
-  # 6) URLs históricas/crawling + parámetros
+  # 6) Historical URLs / crawling + params
   - id: urls_params
     impl: urls_params
     params:
       katana_depth: 2
       dedupe: true
 
-  # 7) Fuzzing (priorizado)
+  # 7) Directory fuzzing (prioritized)
   - id: ffuf
     impl: ffuf
     params:
@@ -75,39 +78,38 @@ nodes:
       per_host_minutes: 10
       max_hosts: 30
 
-  # 8) TLS/Certs
+  # 8) TLS / certificates
   - id: tls_meta
     impl: tlsx
 
-  # 9) Footprint SSO/IdP
+  # 9) IdP / SSO footprint
   - id: idp_probe
     impl: idp_probe
 
-  # 10) Gráficos + Reporte
+  # 10) Graphs + report
   - id: render_graphs
     impl: render_graphs
     params:
       top_ports: 12
       top_tech: 20
+
   - id: report
     impl: report
 
 edges:
-  - { from: whois,         to: amass_asn }
-  - { from: amass_asn,     to: subfinder }
-  - { from: subfinder,     to: assetfinder }
-  - { from: assetfinder,   to: merge_subs }
-  - { from: merge_subs,    to: dnsx_resolve }
-  - { from: dnsx_resolve,  to: dig_suite }
-  - { from: dig_suite,     to: httpx }
-  - { from: httpx,         to: naabu }
-  - { from: naabu,         to: nmap }
-  - { from: nmap,          to: web_fp }
-  - { from: web_fp,        to: urls_params }
-  - { from: urls_params,   to: ffuf }
-  - { from: ffuf,          to: tls_meta }
-  - { from: tls_meta,      to: idp_probe }
-  - { from: idp_probe,     to: render_graphs }
-  - { from: render_graphs, to: report }
-
-
+  - [whois, amass_asn]
+  - [amass_asn, subfinder]
+  - [subfinder, assetfinder]
+  - [assetfinder, merge_subs]
+  - [merge_subs, dnsx]
+  - [dnsx, dig_suite]
+  - [dig_suite, httpx]
+  - [httpx, naabu]
+  - [naabu, nmap]
+  - [nmap, web_fp]
+  - [web_fp, urls_params]
+  - [urls_params, ffuf]
+  - [ffuf, tls_meta]
+  - [tls_meta, idp_probe]
+  - [idp_probe, render_graphs]
+  - [render_graphs, report]
