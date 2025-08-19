@@ -3,7 +3,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import typer
 
@@ -11,8 +11,9 @@ from .graph import build_graph_from_playbook, init_state
 from .settings import PLAYBOOKS_DIR, RUNS_DIR, TOOLS
 from .utils.io import run_dir, save_json
 from .utils.playbooks import load_playbook
+from .utils.install import install_missing_tools, detect_platform
 
-# UI en vivo (Rich). Si no existe el módulo, seguimos sin UI.
+# UI en vivo (Rich). Si no está, seguimos sin UI.
 try:
     from .utils.ui import PipelineUI  # necesitas redflow/utils/ui.py
 except Exception:  # pragma: no cover
@@ -40,7 +41,6 @@ def _write_json(path: Path, data: dict) -> None:
 def _validate_target(target: str) -> None:
     if not target or not target.strip():
         raise typer.BadParameter("Debes especificar un dominio o IP.")
-    # Validación ligera; dominios/IPs más complejas déjalas a los nodos.
 
 
 def _copy_scope_to_run(scope: Optional[Path], run_path: Path) -> Optional[Path]:
@@ -55,30 +55,62 @@ def _echo_kv(k: str, v: str):
     typer.echo(typer.style(k + ": ", bold=True) + v)
 
 
-# ---------------------------------------------------------------------------
-# Núcleo de verificación (usable desde CLI y desde código)
-# ---------------------------------------------------------------------------
-
-def _check_impl(extra: Optional[List[str]] = None) -> None:
-    """Verifica que las herramientas de terceros estén en PATH (usable desde código)."""
+def _print_tools_status(extra: Optional[List[str]] = None) -> Tuple[List[str], List[str]]:
+    """Imprime el estado de herramientas y devuelve (presentes, faltantes)."""
     import shutil
-
     req = {v for v in TOOLS.values() if v}
     if extra:
         req |= set(extra)
-
-    missing: List[str] = []
+    present, missing = [], []
     typer.echo("Verificando herramientas en PATH:")
     for name in sorted(req):
         path = shutil.which(name)
         if path:
+            present.append(name)
             typer.echo(f"  ✓ {name}  ->  {path}")
         else:
-            typer.echo(f"  ✗ {name}  (no encontrado)")
             missing.append(name)
+            typer.echo(f"  ✗ {name}  (no encontrado)")
+    return present, missing
 
-    if missing:
+
+def _check_or_install(interactive: bool, auto_yes: bool, extra: Optional[List[str]] = None) -> None:
+    """Muestra estado, ofrece instalar faltantes y valida al final."""
+    _, missing = _print_tools_status(extra)
+    if not missing:
+        return
+
+    # Si no interactivo, o usuario no acepta, aborta
+    do_install = False
+    if interactive and sys.stdout.isatty():
+        do_install = typer.confirm(
+            f"Faltan {len(missing)} herramientas ({', '.join(missing[:6])}{'…' if len(missing) > 6 else ''}). ¿Instalarlas ahora?",
+            default=True,
+        )
+    elif auto_yes:
+        do_install = True
+
+    if not do_install:
         typer.echo("\nFaltan herramientas. Instálalas o ajusta tu PATH.")
+        raise typer.Exit(code=2)
+
+    # Intenta instalar
+    results = install_missing_tools(missing, auto_yes=auto_yes)
+    ok = [r.tool for r in results if r.ok]
+    bad = [r for r in results if not r.ok]
+
+    if ok:
+        typer.echo(typer.style(f"\nInstaladas: {', '.join(ok)}", fg=typer.colors.GREEN))
+    if bad:
+        typer.echo(typer.style("\nNo se pudieron instalar:", fg=typer.colors.RED, bold=True))
+        for r in bad:
+            typer.echo(f"  - {r.tool} ({r.method})")
+            if r.stderr:
+                typer.echo(f"      {r.stderr.strip().splitlines()[-1][:140]}")
+
+    # Re-chequear
+    _, missing2 = _print_tools_status(extra)
+    if missing2:
         raise typer.Exit(code=2)
 
 
@@ -88,7 +120,6 @@ def _check_impl(extra: Optional[List[str]] = None) -> None:
 
 @app.command()
 def list_playbooks() -> None:
-    """Lista playbooks disponibles en la carpeta configurada."""
     p = Path(PLAYBOOKS_DIR)
     if not p.exists():
         typer.echo(f"No existe PLAYBOOKS_DIR: {p}")
@@ -107,10 +138,26 @@ def check(
     extra: Optional[List[str]] = typer.Option(
         None,
         help="Nombres adicionales de binarios a verificar (además de TOOLS).",
-    )
+    ),
+    install_missing: bool = typer.Option(
+        False,
+        "--install-missing/--no-install-missing",
+        help="Ofrecer instalar herramientas faltantes.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Responde 'sí' automáticamente a las confirmaciones.",
+    ),
 ) -> None:
-    """Verifica que las herramientas de terceros estén en PATH (CLI)."""
-    _check_impl(extra)
+    """Verifica herramientas y (opcionalmente) instala las faltantes."""
+    present, missing = _print_tools_status(extra)
+    if missing and (install_missing or yes):
+        _check_or_install(interactive=install_missing, auto_yes=yes, extra=extra)
+    elif missing:
+        typer.echo("\nFaltan herramientas. Usa --install-missing o instala manualmente.")
+        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -136,12 +183,18 @@ def run(
     check_tools: bool = typer.Option(
         True,
         "--check-tools/--no-check-tools",
-        help="Verificar binarios antes de ejecutar.",
+        help="Verificar/instalar binarios antes de ejecutar.",
     ),
     ui: bool = typer.Option(
         True,
         "--ui/--no-ui",
         help="Mostrar UI de progreso en vivo (Rich).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Responde 'sí' automáticamente a confirmaciones de instalación.",
     ),
 ) -> None:
     """
@@ -149,9 +202,9 @@ def run(
     """
     _validate_target(target)
 
-    # Verificación de binarios
+    # Verificación e instalación opcional
     if check_tools:
-        _check_impl()
+        _check_or_install(interactive=True, auto_yes=yes)
 
     # Estado inicial
     state = init_state(target)
@@ -228,7 +281,6 @@ def resume(
     rdir = run_dir(run_id)  # asegura existencia
     state_path = Path(rdir) / "state.json"
     if not state_path.exists():
-        # intentar con algún snapshot
         candidates = (
             sorted(Path(rdir).glob("state_after_*.json"))
             or sorted(Path(rdir).glob("state_init.json"))
