@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Optional, List
 
@@ -9,11 +10,19 @@ import typer
 from .graph import build_graph_from_playbook, init_state
 from .settings import PLAYBOOKS_DIR, RUNS_DIR, TOOLS
 from .utils.io import run_dir, save_json
+from .utils.playbooks import load_playbook
+
+# UI en vivo (Rich). Si no existe el módulo, seguimos sin UI.
+try:
+    from .utils.ui import PipelineUI  # necesitas redflow/utils/ui.py
+except Exception:  # pragma: no cover
+    PipelineUI = None  # type: ignore
 
 app = typer.Typer(help="RedFlow — CLI para reconocimiento y enumeración")
 
-# ------- utilidades locales -------
-
+# ---------------------------------------------------------------------------
+# Utilidades locales
+# ---------------------------------------------------------------------------
 
 def _read_json(path: Path) -> dict:
     if not path.exists():
@@ -31,7 +40,7 @@ def _write_json(path: Path, data: dict) -> None:
 def _validate_target(target: str) -> None:
     if not target or not target.strip():
         raise typer.BadParameter("Debes especificar un dominio o IP.")
-    # Validación ligera; dominios/ips más complejas déjalas a los nodos.
+    # Validación ligera; dominios/IPs más complejas déjalas a los nodos.
 
 
 def _copy_scope_to_run(scope: Optional[Path], run_path: Path) -> Optional[Path]:
@@ -46,8 +55,9 @@ def _echo_kv(k: str, v: str):
     typer.echo(typer.style(k + ": ", bold=True) + v)
 
 
-# ------- núcleo de verificación (usable desde CLI y desde código) -------
-
+# ---------------------------------------------------------------------------
+# Núcleo de verificación (usable desde CLI y desde código)
+# ---------------------------------------------------------------------------
 
 def _check_impl(extra: Optional[List[str]] = None) -> None:
     """Verifica que las herramientas de terceros estén en PATH (usable desde código)."""
@@ -72,8 +82,9 @@ def _check_impl(extra: Optional[List[str]] = None) -> None:
         raise typer.Exit(code=2)
 
 
-# ------- comandos -------
-
+# ---------------------------------------------------------------------------
+# Comandos
+# ---------------------------------------------------------------------------
 
 @app.command()
 def list_playbooks() -> None:
@@ -127,13 +138,18 @@ def run(
         "--check-tools/--no-check-tools",
         help="Verificar binarios antes de ejecutar.",
     ),
+    ui: bool = typer.Option(
+        True,
+        "--ui/--no-ui",
+        help="Mostrar UI de progreso en vivo (Rich).",
+    ),
 ) -> None:
     """
     Ejecuta un playbook contra el target. Crea un nuevo run_id y guarda estado/artefactos.
     """
     _validate_target(target)
 
-    # Llamada interna segura (evita OptionInfo de Typer)
+    # Verificación de binarios
     if check_tools:
         _check_impl()
 
@@ -149,40 +165,48 @@ def run(
     _echo_kv("Playbook", playbook)
     _echo_kv("Target", target)
 
-    # Persistimos un primer snapshot
+    # Snapshot inicial
     save_json(state["run_id"], "state_init", dict(state))
 
-    # Compilar y ejecutar el grafo
+    # Cargar playbook para conocer los nodos (para UI)
+    try:
+        pb = load_playbook(playbook)
+        node_ids = [n["id"] for n in pb["nodes"]]
+    except Exception as e:
+        typer.echo(typer.style(f"Error cargando playbook: {e}", fg=typer.colors.RED))
+        raise typer.Exit(code=1)
+
+    # Compilar grafo
     try:
         wf = build_graph_from_playbook(playbook, target)
     except Exception as e:
-        typer.echo(
-            typer.style(
-                f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED
-            )
-        )
+        typer.echo(typer.style(f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED))
         raise typer.Exit(code=1)
 
+    # UI en vivo (si procede)
+    use_ui = ui and sys.stdout.isatty() and PipelineUI is not None
+    pipeline_ui = None
+    if use_ui:
+        pipeline_ui = PipelineUI(state["run_id"], target, playbook, node_ids)
+        state["__ui"] = pipeline_ui  # el wrapper de graph leerá esto
+
     try:
-        asyncio.run(wf.ainvoke(state))
+        if pipeline_ui:
+            with pipeline_ui.live():
+                asyncio.run(wf.ainvoke(state))
+        else:
+            asyncio.run(wf.ainvoke(state))
     except KeyboardInterrupt:
         typer.echo(
-            typer.style(
-                "\nEjecución interrumpida por el usuario.",
-                fg=typer.colors.YELLOW,
-                bold=True,
-            )
+            typer.style("\nEjecución interrumpida por el usuario.", fg=typer.colors.YELLOW, bold=True)
         )
         raise typer.Exit(code=130)
     except Exception as e:
-        typer.echo(
-            typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED)
-        )
-        # Guardar estado por si se quiere reanudar o depurar
+        typer.echo(typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED))
         _write_json(rdir / "state_error.json", dict(state))
         raise typer.Exit(code=1)
 
-    # Guardar estado final (por si el nodo de reporte no lo hizo)
+    # Guardar estado final
     _write_json(rdir / "state.json", dict(state))
 
     # Mensaje final
@@ -233,9 +257,7 @@ def resume(
         wf = build_graph_from_playbook(pb, target)
     except Exception as e:
         typer.echo(
-            typer.style(
-                f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED
-            )
+            typer.style(f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED)
         )
         raise typer.Exit(code=1)
 
@@ -243,11 +265,7 @@ def resume(
         asyncio.run(wf.ainvoke(state))
     except KeyboardInterrupt:
         typer.echo(
-            typer.style(
-                "\nEjecución interrumpida por el usuario.",
-                fg=typer.colors.YELLOW,
-                bold=True,
-            )
+            typer.style("\nEjecución interrumpida por el usuario.", fg=typer.colors.YELLOW, bold=True)
         )
         raise typer.Exit(code=130)
     except Exception as e:
