@@ -237,12 +237,13 @@ def run(
         typer.echo(typer.style(f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED))
         raise typer.Exit(code=1)
 
-    # UI en vivo (si procede) — se registra por run_id (no viaja en state)
+    # UI en vivo — se registra por run_id; además (compat) se guarda en state["__ui"]
     use_ui = ui and sys.stdout.isatty() and PipelineUI is not None
     pipeline_ui = None
     if use_ui:
         pipeline_ui = PipelineUI(state["run_id"], target, playbook, node_ids)
-        set_ui(state["run_id"], pipeline_ui)  # << registro global
+        set_ui(state["run_id"], pipeline_ui)   # registry global
+        state["__ui"] = pipeline_ui            # fallback por compatibilidad
 
     try:
         if pipeline_ui:
@@ -254,14 +255,19 @@ def run(
         typer.echo(
             typer.style("\nEjecución interrumpida por el usuario.", fg=typer.colors.YELLOW, bold=True)
         )
+        # evita serializar objetos UI si falló en medio
+        state.pop("__ui", None)
         raise typer.Exit(code=130)
     except Exception as e:
         typer.echo(typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED))
+        state.pop("__ui", None)
         _write_json(rdir / "state_error.json", dict(state))
         raise typer.Exit(code=1)
     finally:
         if use_ui:
-            clear_ui(state["run_id"])  # << limpia el registro
+            clear_ui(state["run_id"])
+        # quita UI del estado antes de cualquier guardado final
+        state.pop("__ui", None)
 
     # Guardar estado final
     _write_json(rdir / "state.json", dict(state))
