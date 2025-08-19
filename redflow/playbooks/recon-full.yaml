@@ -1,0 +1,113 @@
+
+---
+
+# playbooks/recon-full.yaml
+
+```yaml
+name: recon-full
+nodes:
+  # 1) WHOIS / ASN
+  - id: whois
+    impl: whois
+  - id: amass_asn
+    impl: amass_intel
+
+  # 2) Subdominios
+  - id: subfinder
+    impl: subfinder
+    params:
+      all: true
+      silent: true
+  - id: assetfinder
+    impl: assetfinder
+  - id: merge_subs
+    impl: merge_sort_unique
+
+  # 3) DNS resolución y superficie
+  - id: dnsx_resolve
+    impl: dnsx
+    params:
+      resolver: "1.1.1.1"
+  - id: dig_suite
+    impl: dig_suite
+
+  # 4) HTTP y puertos
+  - id: httpx
+    impl: httpx
+    params:
+      jsonl: true
+      include_title: true
+      tech_detect: true
+  - id: naabu
+    impl: naabu
+    params:
+      top_ports: 100
+      jsonl: true
+  - id: nmap
+    impl: nmap
+    params:
+      top_ports: 100
+      stealth: true
+      service_fp: true
+      treat_down_as_up: true
+
+  # 5) Fingerprinting Web y WAF + screenshots
+  - id: web_fp
+    impl: whatweb_waf_gowitness
+    params:
+      gowitness_threads: 3
+
+  # 6) URLs históricas/crawling + parámetros
+  - id: urls_params
+    impl: urls_params
+    params:
+      katana_depth: 2
+      dedupe: true
+
+  # 7) Fuzzing (priorizado)
+  - id: ffuf
+    impl: ffuf
+    params:
+      wordlist: "/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-directories.txt"
+      threads: 20
+      match_codes: "200,204,301,302,401,403"
+      filter_size: 0
+      per_host_minutes: 10
+      max_hosts: 30
+
+  # 8) TLS/Certs
+  - id: tls_meta
+    impl: tlsx
+
+  # 9) Footprint SSO/IdP
+  - id: idp_probe
+    impl: idp_probe
+
+  # 10) Gráficos + Reporte
+  - id: render_graphs
+    impl: render_graphs
+    params:
+      top_ports: 12
+      top_tech: 20
+  - id: report
+    impl: report
+
+edges:
+  - { from: whois,         to: amass_asn }
+  - { from: amass_asn,     to: subfinder }
+  - { from: subfinder,     to: assetfinder }
+  - { from: assetfinder,   to: merge_subs }
+  - { from: merge_subs,    to: dnsx_resolve }
+  - { from: dnsx_resolve,  to: dig_suite }
+  - { from: dig_suite,     to: httpx }
+  - { from: httpx,         to: naabu }
+  - { from: naabu,         to: nmap }
+  - { from: nmap,          to: web_fp }
+  - { from: web_fp,        to: urls_params }
+  - { from: urls_params,   to: ffuf }
+  - { from: ffuf,          to: tls_meta }
+  - { from: tls_meta,      to: idp_probe }
+  - { from: idp_probe,     to: render_graphs }
+  - { from: render_graphs, to: report }
+
+

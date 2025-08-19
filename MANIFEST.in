@@ -1,0 +1,3 @@
+include README.md
+recursive-include redflow/playbooks *.yaml
+recursive-include redflow/templates *.*

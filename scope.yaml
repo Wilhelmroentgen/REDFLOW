@@ -1,0 +1,13 @@
+# scope.yaml — ejemplo de allowlist (ajústalo a tu proyecto)
+domains:
+  - ejemplo.com
+  - ejemplo.net
+cidrs:
+  - 203.0.113.0/24
+  - 2001:db8::/32
+hosts:
+  - portal.ejemplo.com
+  - api.ejemplo.net
+notes: |
+  Solo entornos de staging y dev.
+  No incluir *.gov ni proveedores externos sin autorización escrita.

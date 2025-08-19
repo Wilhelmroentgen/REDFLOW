@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redflow-recon"
+version = "0.1.0"
+description = "Orquestador de recon/enumeración para Red Team (CLI con playbooks)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }  # cámbialo si usas otra licencia
+authors = [{ name = "Tu Nombre", email = "tu.email@ejemplo.com" }]
+keywords = ["security", "recon", "pentest", "red team"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Environment :: Console",
+  "Topic :: Security",
+]
+
+dependencies = [
+  "typer>=0.12",
+  "pyyaml>=6.0",
+  "matplotlib>=3.8",
+  "langgraph>=0.2",
+  "rich>=13",
+]
+
+# Crea el comando `redflow` en PATH
+[project.scripts]
+redflow = "redflow.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["redflow*"]
+
+# Incluye archivos de datos dentro del wheel
+[tool.setuptools.package-data]
+redflow = ["playbooks/*.yaml", "templates/**/*"]
