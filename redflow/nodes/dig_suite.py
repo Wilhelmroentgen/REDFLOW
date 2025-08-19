@@ -1,53 +1,50 @@
-from __future__ import annotations
-from typing import Dict, Any, List
+# redflow/nodes/dig_suite.py
+from typing import Dict, List
+
 from ..utils.shell import run_cmd
-from ..utils.io import append_artifact
-from ..settings import TOOLS, TIMEOUTS
+from ..utils.io import run_dir, append_artifact
 
-async def _run(cmd: str, to_key: str, state: Dict[str, Any], timeout: int):
-    res = await run_cmd(cmd, timeout=timeout)
-    if res.stdout:
-        append_artifact(state["run_id"], to_key, res.stdout)
-        return res.stdout
-    else:
-        state.setdefault("errors", []).append({"node":"dig_suite","cmd":cmd,"stderr":res.stderr})
-        return ""
 
-async def run(state: Dict[str, Any]) -> Dict[str, Any]:
-    domain = state.get("target", "")
-    if not domain or "." not in domain:
-        # Para IPs no aplica esta suite
-        return state
-
-    timeout = TIMEOUTS.get("dnsx", 600)
-    dig = TOOLS.get("dig","dig")
+async def run(state: Dict, **kwargs) -> Dict:
+    run_id = state["run_id"]
+    domain = state["target"]
+    rdir = run_dir(run_id)
 
     # ANY
-    any_txt = await _run(f'{dig} {domain} any -noall -answer', "dig_any.txt", state, timeout)
+    r_any = await run_cmd(f"dig {domain} any +noall +answer", timeout=120)
+    append_artifact(run_id, "dig_any.txt", r_any.stdout or r_any.stderr or "")
 
-    # TXT (SPF/DMARC)
-    spf_dmarc = await _run(f'{dig} txt {domain} +short', "spf_dmarc.txt", state, timeout)
-
-    # DKIM default
-    dkim = await _run(f'{dig} txt default._domainkey.{domain} +short', "dkim_default.txt", state, timeout)
+    # SPF/DMARC/DKIM TXT
+    r_spf = await run_cmd(f"dig txt {domain} +short", timeout=120)
+    r_dmarc = await run_cmd(f"dig txt _dmarc.{domain} +short", timeout=120)
+    r_dkim = await run_cmd(
+        f"dig txt default._domainkey.{domain} +short", timeout=120
+    )
+    append_artifact(
+        run_id,
+        "spf_dmarc.txt",
+        (r_spf.stdout or "")
+        + ("\n" if r_spf.stdout else "")
+        + (r_dmarc.stdout or "")
+        + ("\n" if r_dmarc.stdout else "")
+        + (r_dkim.stdout or ""),
+    )
 
     # NS
-    ns_raw = await _run(f'{dig} ns {domain} +short', "ns.txt", state, timeout)
-    ns_list = [l.strip().rstrip(".") for l in ns_raw.splitlines() if l.strip()]
+    r_ns = await run_cmd(f"dig ns {domain} +short", timeout=120)
+    append_artifact(run_id, "ns.txt", r_ns.stdout or r_ns.stderr or "")
+    ns_list: List[str] = [
+        x.strip().rstrip(".") for x in (r_ns.stdout or "").splitlines() if x.strip()
+    ]
 
-    # AXFR para cada NS
-    axfr_results: List[Dict[str, Any]] = []
+    # Attempt AXFR per NS
+    axfr_all = []
     for ns in ns_list:
-        cmd = f'{dig} axfr {domain} @{ns}'
-        out = await _run(cmd, f'axfr_{ns}.txt', state, timeout)
-        axfr_results.append({"ns": ns, "ok": bool(out.strip()), "lines": len(out.splitlines()) if out else 0})
+        r_ax = await run_cmd(f"dig AXFR {domain} @{ns}", timeout=120)
+        if r_ax.stdout:
+            axfr_all.append(f";; AXFR @{ns}\n{r_ax.stdout}")
 
-    # Guarda en state.dns_surface
-    state["dns_surface"] = {
-        "any": any_txt.splitlines() if any_txt else [],
-        "spf_dmarc": spf_dmarc.splitlines() if spf_dmarc else [],
-        "dkim_default": dkim.splitlines() if dkim else [],
-        "ns": ns_list,
-        "axfr": axfr_results
-    }
+    if axfr_all:
+        append_artifact(run_id, "axfr.txt", "\n\n".join(axfr_all))
+
     return state
