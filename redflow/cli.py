@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 import asyncio
 import json
-import os
 from pathlib import Path
 from typing import Optional, List
 
@@ -14,6 +14,7 @@ app = typer.Typer(help="RedFlow — CLI para reconocimiento y enumeración")
 
 # ------- utilidades locales -------
 
+
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -22,13 +23,16 @@ def _read_json(path: Path) -> dict:
     except Exception:
         return {}
 
+
 def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
 
 def _validate_target(target: str) -> None:
     if not target or not target.strip():
         raise typer.BadParameter("Debes especificar un dominio o IP.")
     # Validación ligera; dominios/ips más complejas déjalas a los nodos.
+
 
 def _copy_scope_to_run(scope: Optional[Path], run_path: Path) -> Optional[Path]:
     if not scope:
@@ -37,10 +41,13 @@ def _copy_scope_to_run(scope: Optional[Path], run_path: Path) -> Optional[Path]:
     dest.write_text(Path(scope).read_text(encoding="utf-8"), encoding="utf-8")
     return dest
 
+
 def _echo_kv(k: str, v: str):
     typer.echo(typer.style(k + ": ", bold=True) + v)
 
+
 # ------- comandos -------
+
 
 @app.command()
 def list_playbooks() -> None:
@@ -49,7 +56,7 @@ def list_playbooks() -> None:
     if not p.exists():
         typer.echo(f"No existe PLAYBOOKS_DIR: {p}")
         raise typer.Exit(code=1)
-    items = [f.name for f in p.iterdir() if f.suffix in (".yaml", ".yml")]
+    items = [f.name for f in p.iterdir() if f.suffix.lower() in (".yaml", ".yml")]
     if not items:
         typer.echo("No hay playbooks (*.yaml) en PLAYBOOKS_DIR.")
         raise typer.Exit(code=1)
@@ -57,51 +64,76 @@ def list_playbooks() -> None:
     for f in sorted(items):
         typer.echo(f"  - {f}")
 
+
 @app.command()
 def check(
-    extra: List[str] = typer.Option(
+    extra: Optional[List[str]] = typer.Option(
         None,
-        help="Nombres adicionales de binarios a verificar (además de TOOLS)."
+        help="Nombres adicionales de binarios a verificar (además de TOOLS).",
     )
 ) -> None:
     """Verifica que las herramientas de terceros estén en PATH."""
     import shutil
-    req = set(TOOLS.values())
+
+    req = set([v for v in TOOLS.values() if v])
     if extra:
         req |= set(extra)
+
     missing = []
     typer.echo("Verificando herramientas en PATH:")
     for name in sorted(req):
-        if not name:
-            continue
         path = shutil.which(name)
         if path:
             typer.echo(f"  ✓ {name}  ->  {path}")
         else:
             typer.echo(f"  ✗ {name}  (no encontrado)")
             missing.append(name)
+
     if missing:
         typer.echo("\nFaltan herramientas. Instálalas o ajusta tu PATH.")
         raise typer.Exit(code=2)
 
+
 @app.command()
 def run(
     target: str = typer.Argument(..., help="Dominio o IP objetivo."),
-    playbook: str = typer.Option("recon-full", "--playbook", "-p", help="Nombre o ruta al playbook YAML."),
-    allowlist: Optional[Path] = typer.Option(None, "--allowlist", "-a", exists=True, readable=True, help="Archivo scope.yaml para limitar alcance."),
-    resume: bool = typer.Option(False, "--resume", help="Reusar artefactos/estado si existen (idempotencia por nodos)."),
-    force: bool = typer.Option(False, "--force", help="Ignora artefactos previos (los nodos deberían respetar este flag si lo soportan)."),
-    check_tools: bool = typer.Option(True, "--check-tools/--no-check-tools", help="Verificar binarios antes de ejecutar."),
+    playbook: str = typer.Option(
+        "recon-full", "--playbook", "-p", help="Nombre o ruta al playbook YAML."
+    ),
+    allowlist: Optional[Path] = typer.Option(
+        None,
+        "--allowlist",
+        "-a",
+        exists=True,
+        readable=True,
+        help="Archivo scope.yaml para limitar alcance.",
+    ),
+    resume: bool = typer.Option(
+        False, "--resume", help="Reusar artefactos/estado si existen."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Ignora artefactos previos si el nodo lo soporta."
+    ),
+    check_tools: bool = typer.Option(
+        True,
+        "--check-tools/--no-check-tools",
+        help="Verificar binarios antes de ejecutar.",
+    ),
 ) -> None:
     """
     Ejecuta un playbook contra el target. Crea un nuevo run_id y guarda estado/artefactos.
     """
     _validate_target(target)
+
+    # Ejecuta el comando 'check' directamente con sus defaults (sin usar .callback)
     if check_tools:
         try:
-            check.callback  # type: ignore[attr-defined]
-            check()         # llama al comando 'check' con defaults
+            check()
+        except typer.Exit as e:
+            # Propaga tal cual el código de salida
+            raise
         except SystemExit as e:
+            # Normaliza SystemExit a Typer Exit
             raise typer.Exit(code=e.code)
 
     # Estado inicial
@@ -123,16 +155,28 @@ def run(
     try:
         wf = build_graph_from_playbook(playbook, target)
     except Exception as e:
-        typer.echo(typer.style(f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED))
+        typer.echo(
+            typer.style(
+                f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED
+            )
+        )
         raise typer.Exit(code=1)
 
     try:
         asyncio.run(wf.ainvoke(state))
     except KeyboardInterrupt:
-        typer.echo(typer.style("\nEjecución interrumpida por el usuario.", fg=typer.colors.YELLOW, bold=True))
+        typer.echo(
+            typer.style(
+                "\nEjecución interrumpida por el usuario.",
+                fg=typer.colors.YELLOW,
+                bold=True,
+            )
+        )
         raise typer.Exit(code=130)
     except Exception as e:
-        typer.echo(typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED))
+        typer.echo(
+            typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED)
+        )
         # Guardar estado por si se quiere reanudar o depurar
         _write_json(rdir / "state_error.json", dict(state))
         raise typer.Exit(code=1)
@@ -145,10 +189,13 @@ def run(
     _echo_kv("Reporte", str(report_md if report_md.exists() else "(pendiente)"))
     typer.echo(typer.style("✔ Ejecución completada.", fg=typer.colors.GREEN, bold=True))
 
+
 @app.command()
 def resume(
     run_id: str = typer.Argument(..., help="ID de ejecución existente."),
-    playbook: Optional[str] = typer.Option(None, "--playbook", "-p", help="Override del playbook si lo deseas."),
+    playbook: Optional[str] = typer.Option(
+        None, "--playbook", "-p", help="Override del playbook si lo deseas."
+    ),
 ) -> None:
     """
     Reanuda un run_id existente. Útil si se interrumpió la ejecución.
@@ -157,7 +204,10 @@ def resume(
     state_path = Path(rdir) / "state.json"
     if not state_path.exists():
         # intentar con algún snapshot
-        candidates = sorted(Path(rdir).glob("state_after_*.json")) or sorted(Path(rdir).glob("state_init.json"))
+        candidates = (
+            sorted(Path(rdir).glob("state_after_*.json"))
+            or sorted(Path(rdir).glob("state_init.json"))
+        )
         if candidates:
             state_path = candidates[-1]
         else:
@@ -181,16 +231,28 @@ def resume(
     try:
         wf = build_graph_from_playbook(pb, target)
     except Exception as e:
-        typer.echo(typer.style(f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED))
+        typer.echo(
+            typer.style(
+                f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED
+            )
+        )
         raise typer.Exit(code=1)
 
     try:
         asyncio.run(wf.ainvoke(state))
     except KeyboardInterrupt:
-        typer.echo(typer.style("\nEjecución interrumpida por el usuario.", fg=typer.colors.YELLOW, bold=True))
+        typer.echo(
+            typer.style(
+                "\nEjecución interrumpida por el usuario.",
+                fg=typer.colors.YELLOW,
+                bold=True,
+            )
+        )
         raise typer.Exit(code=130)
     except Exception as e:
-        typer.echo(typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED))
+        typer.echo(
+            typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED)
+        )
         _write_json(Path(rdir) / "state_error.json", dict(state))
         raise typer.Exit(code=1)
 
@@ -198,6 +260,7 @@ def resume(
     report_md = Path(rdir) / "report.md"
     _echo_kv("Reporte", str(report_md if report_md.exists() else "(pendiente)"))
     typer.echo(typer.style("✔ Reanudación completada.", fg=typer.colors.GREEN, bold=True))
+
 
 @app.command()
 def show(
@@ -230,6 +293,7 @@ def show(
         typer.echo("\nGraphs:")
         for p in sorted(graphs.glob("*")):
             typer.echo(f"  - {p.name}")
+
 
 if __name__ == "__main__":
     app()
