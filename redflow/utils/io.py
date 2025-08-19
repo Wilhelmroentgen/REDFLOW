@@ -2,11 +2,26 @@
 import json
 import os
 import tempfile
+import yaml
 from pathlib import Path
 from typing import Any, Dict
 
 from ..settings import RUNS_DIR
 
+def load_playbook_file(path: str) -> Dict[str, Any]:
+    """
+    Load a YAML playbook file and return its data as a dict.
+    Raises helpful errors if missing or invalid.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Playbook not found: {p}")
+    try:
+        text = p.read_text(encoding="utf-8")
+        data = yaml.safe_load(text)
+        return data or {}
+    except Exception as e:
+        raise ValueError(f"Failed to parse YAML playbook '{p}': {e}") from e
 
 def new_run_id() -> str:
     import uuid
