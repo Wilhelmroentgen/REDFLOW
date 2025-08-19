@@ -11,11 +11,12 @@ from .graph import build_graph_from_playbook, init_state
 from .settings import PLAYBOOKS_DIR, RUNS_DIR, TOOLS
 from .utils.io import run_dir, save_json
 from .utils.playbooks import load_playbook
-from .utils.install import install_missing_tools, detect_platform
+from .utils.install import install_missing_tools
+from .utils.ui_registry import set_ui, clear_ui
 
 # UI en vivo (Rich). Si no está, seguimos sin UI.
 try:
-    from .utils.ui import PipelineUI  # necesitas redflow/utils/ui.py
+    from .utils.ui import PipelineUI  # redflow/utils/ui.py
 except Exception:  # pragma: no cover
     PipelineUI = None  # type: ignore
 
@@ -80,7 +81,6 @@ def _check_or_install(interactive: bool, auto_yes: bool, extra: Optional[List[st
     if not missing:
         return
 
-    # Si no interactivo, o usuario no acepta, aborta
     do_install = False
     if interactive and sys.stdout.isatty():
         do_install = typer.confirm(
@@ -106,7 +106,8 @@ def _check_or_install(interactive: bool, auto_yes: bool, extra: Optional[List[st
         for r in bad:
             typer.echo(f"  - {r.tool} ({r.method})")
             if r.stderr:
-                typer.echo(f"      {r.stderr.strip().splitlines()[-1][:140]}")
+                last = r.stderr.strip().splitlines()[-1][:140]
+                typer.echo(f"      {last}")
 
     # Re-chequear
     _, missing2 = _print_tools_status(extra)
@@ -236,12 +237,12 @@ def run(
         typer.echo(typer.style(f"Error al construir grafo/playbook: {e}", fg=typer.colors.RED))
         raise typer.Exit(code=1)
 
-    # UI en vivo (si procede)
+    # UI en vivo (si procede) — se registra por run_id (no viaja en state)
     use_ui = ui and sys.stdout.isatty() and PipelineUI is not None
     pipeline_ui = None
     if use_ui:
         pipeline_ui = PipelineUI(state["run_id"], target, playbook, node_ids)
-        state["__ui"] = pipeline_ui  # el wrapper de graph leerá esto
+        set_ui(state["run_id"], pipeline_ui)  # << registro global
 
     try:
         if pipeline_ui:
@@ -258,6 +259,9 @@ def run(
         typer.echo(typer.style(f"Fallo durante la ejecución: {e}", fg=typer.colors.RED))
         _write_json(rdir / "state_error.json", dict(state))
         raise typer.Exit(code=1)
+    finally:
+        if use_ui:
+            clear_ui(state["run_id"])  # << limpia el registro
 
     # Guardar estado final
     _write_json(rdir / "state.json", dict(state))
