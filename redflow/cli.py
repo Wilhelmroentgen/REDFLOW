@@ -20,7 +20,42 @@ try:
 except Exception:  # pragma: no cover
     PipelineUI = None  # type: ignore
 
-app = typer.Typer(help="RedFlow — CLI para reconocimiento y enumeración")
+LONG_APP_HELP = """
+[bold]RedFlow[/] — Orchestrates recon/enum playbooks over a [bold]domain or IP[/],
+wrapping popular tools and producing reproducible artifacts, charts, and a Markdown report.
+
+[bold]Commands[/]
+ • [cyan]list-playbooks[/]  – List bundled playbooks (YAML).
+ • [cyan]check[/]           – Verify external binaries in PATH (optionally install missing ones).
+ • [cyan]run[/]             – Execute a playbook against a target with live progress UI.
+ • [cyan]resume[/]          – Resume a previous run_id from its saved state.
+ • [cyan]show[/]            – Show key files of a run.
+
+[bold]Examples[/]
+  redflow check --install-missing -y
+  redflow run example.com -p recon-full -y
+  redflow run 192.0.2.10 -p /path/custom.yaml --no-check-tools
+  redflow run corp.com -a scope.yaml --resume
+  redflow resume <run_id>
+  redflow show <run_id>
+
+[bold]Output[/]
+  ~/.local/share/redflow/runs/<run_id>/
+    ├─ artifacts/   # tool outputs (txt/json/png/xml)
+    ├─ graphs/      # charts (ports, tech, TLS, subdomain tree)
+    ├─ report.md    # consolidated report
+    └─ state.json   # final state (and state_after_*.json snapshots)
+
+[bold]Exit codes[/]
+  0 OK • 1 execution/build error • 2 missing tools • 130 interrupted by user
+"""
+
+app = typer.Typer(
+    help=LONG_APP_HELP,
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode="rich",
+)
 
 # ---------------------------------------------------------------------------
 # Utilidades locales
@@ -119,7 +154,7 @@ def _check_or_install(interactive: bool, auto_yes: bool, extra: Optional[List[st
 # Comandos
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(help="List bundled playbooks (*.yaml) found in PLAYBOOKS_DIR.")
 def list_playbooks() -> None:
     p = Path(PLAYBOOKS_DIR)
     if not p.exists():
@@ -134,7 +169,18 @@ def list_playbooks() -> None:
         typer.echo(f"  - {f}")
 
 
-@app.command(name="check")
+@app.command(
+    name="check",
+    help=(
+        "Verify that required external binaries are in PATH.\n\n"
+        "Tips:\n"
+        "  • Use --install-missing to offer installation (interactive).\n"
+        "  • Use -y/--yes to auto-confirm prompts.\n"
+        "Examples:\n"
+        "  redflow check --install-missing -y\n"
+        "  redflow check --extra masscan --extra gowitness\n"
+    ),
+)
 def check(
     extra: Optional[List[str]] = typer.Option(
         None,
@@ -161,7 +207,17 @@ def check(
         raise typer.Exit(code=2)
 
 
-@app.command()
+@app.command(
+    help=(
+        "Run a playbook against a target domain/IP with live progress UI.\n\n"
+        "Common examples:\n"
+        "  redflow run example.com -p recon-full -y\n"
+        "  redflow run 192.0.2.10 -p /path/custom.yaml --no-check-tools\n"
+        "  redflow run corp.com -a scope.yaml --resume\n"
+        "\n"
+        "Exit codes: 0 OK · 1 error · 2 missing tools · 130 interrupted"
+    )
+)
 def run(
     target: str = typer.Argument(..., help="Dominio o IP objetivo."),
     playbook: str = typer.Option(
@@ -278,7 +334,13 @@ def run(
     typer.echo(typer.style("✔ Ejecución completada.", fg=typer.colors.GREEN, bold=True))
 
 
-@app.command()
+@app.command(
+    help=(
+        "Resume a previous run_id using its saved state.json (or last state_after_*.json).\n\n"
+        "Example:\n"
+        "  redflow resume abcd1234ef56\n"
+    )
+)
 def resume(
     run_id: str = typer.Argument(..., help="ID de ejecución existente."),
     playbook: Optional[str] = typer.Option(
@@ -343,7 +405,13 @@ def resume(
     typer.echo(typer.style("✔ Reanudación completada.", fg=typer.colors.GREEN, bold=True))
 
 
-@app.command()
+@app.command(
+    help=(
+        "Show key files/paths of a given run_id (artifacts, graphs, report, state).\n\n"
+        "Example:\n"
+        "  redflow show abcd1234ef56\n"
+    )
+)
 def show(
     run_id: str = typer.Argument(..., help="ID de ejecución."),
 ) -> None:
@@ -378,3 +446,4 @@ def show(
 
 if __name__ == "__main__":
     app()
+
