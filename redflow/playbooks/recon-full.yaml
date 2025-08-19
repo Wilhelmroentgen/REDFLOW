@@ -97,19 +97,19 @@ nodes:
     impl: report
 
 edges:
-  - [whois, amass_asn]
-  - [amass_asn, subfinder]
-  - [subfinder, assetfinder]
-  - [assetfinder, merge_subs]
-  - [merge_subs, dnsx]
-  - [dnsx, dig_suite]
-  - [dig_suite, httpx]
-  - [httpx, naabu]
-  - [naabu, nmap]
-  - [nmap, web_fp]
-  - [web_fp, urls_params]
-  - [urls_params, ffuf]
-  - [ffuf, tls_meta]
-  - [tls_meta, idp_probe]
-  - [idp_probe, render_graphs]
-  - [render_graphs, report]
+  - { from: whois,        to: amass_asn }
+  - { from: amass_asn,    to: subfinder }
+  - { from: subfinder,    to: assetfinder }
+  - { from: assetfinder,  to: merge_subs }
+  - { from: merge_subs,   to: dnsx }
+  - { from: dnsx,         to: dig_suite }
+  - { from: dig_suite,    to: httpx }
+  - { from: httpx,        to: naabu }
+  - { from: naabu,        to: nmap }
+  - { from: nmap,         to: web_fp }
+  - { from: web_fp,       to: urls_params }
+  - { from: urls_params,  to: ffuf }
+  - { from: ffuf,         to: tls_meta }
+  - { from: tls_meta,     to: idp_probe }
+  - { from: idp_probe,    to: render_graphs }
+  - { from: render_graphs,to: report }
