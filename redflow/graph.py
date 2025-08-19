@@ -10,14 +10,9 @@ from .utils.io import new_run_id, save_json
 from .reporters.markdown import write_report
 
 
-# ---------------------------------------------------------------------
-# Estado global del workflow
-# ---------------------------------------------------------------------
 class RFState(TypedDict, total=False):
     run_id: str
     target: str
-
-    # Flags de ejecución
     flags: Dict[str, Any]
 
     # WHOIS / ASN / alcance
@@ -59,11 +54,7 @@ class RFState(TypedDict, total=False):
     __ui: Any
 
 
-# ---------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------
 def _resolve_impl(impl: str) -> Optional[Callable[..., Awaitable[RFState]]]:
-    """Importa redflow.nodes.<impl>.run si existe; si no, None."""
     try:
         mod = import_module(f".nodes.{impl}", package=__package__)
         return getattr(mod, "run", None)
@@ -72,48 +63,39 @@ def _resolve_impl(impl: str) -> Optional[Callable[..., Awaitable[RFState]]]:
 
 
 def _snapshot_safe(run_id: str, name: str, state: RFState) -> None:
-    """Guarda snapshot del estado SIN campos no serializables (como __ui)."""
     try:
-        sanitized: Dict[str, Any] = {k: v for k, v in dict(state).items() if not str(k).startswith("__")}
+        sanitized: Dict[str, Any] = {
+            k: v for k, v in dict(state).items() if not str(k).startswith("__")
+        }
         save_json(run_id, name, sanitized)
     except Exception:
-        # No romper el flujo/UI por fallos al guardar
         pass
 
 
 def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
-    """
-    Wrapper por nodo:
-    - Notifica UI (start/finish/fail)
-    - Ejecuta el nodo
-    - Guarda snapshot sin __ui (y no bloquea el UI si falla)
-    - Maneja 'report' inline
-    """
     async def _runner(state: RFState) -> RFState:
         ui = state.get("__ui", None)
 
-        # Caso especial: reporte
+        # ---- nodo especial: reporte ----------------------------------------
         if impl == "report":
             if ui:
                 ui.start(node_id)
             try:
                 write_report(state)
                 if ui:
-                    ui.finish(node_id)
+                    ui.finish(node_id)          # finish ANTES del snapshot
                 _snapshot_safe(state["run_id"], "state_final", state)
                 return state
             except Exception as e:
                 state.setdefault("errors", []).append({
-                    "node": node_id,
-                    "impl": impl,
-                    "exception": str(e),
+                    "node": node_id, "impl": impl, "exception": str(e),
                 })
                 if ui:
                     ui.fail(node_id, str(e))
                 _snapshot_safe(state["run_id"], f"state_after_{node_id}_error", state)
                 return state
 
-        # Nodo normal
+        # ---- nodo normal ----------------------------------------------------
         fn = _resolve_impl(impl)
         if fn is None:
             msg = "impl_not_found"
@@ -127,17 +109,22 @@ def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
             ui.start(node_id)
         try:
             new_state = await fn(state, **(params or {}))
-            # ¡Actualiza UI ANTES del snapshot!
+
+            # >>> re-adjunta __ui por si el nodo devolvió un dict nuevo
+            if ui is not None:
+                new_state["__ui"] = ui  # type: ignore[index]
+
             if ui:
-                ui.finish(node_id)
+                ui.finish(node_id)      # finish ANTES del snapshot
             _snapshot_safe(state["run_id"], f"state_after_{node_id}", new_state)
             return new_state
         except Exception as e:
             state.setdefault("errors", []).append({
-                "node": node_id,
-                "impl": impl,
-                "exception": str(e),
+                "node": node_id, "impl": impl, "exception": str(e),
             })
+            # Mantén el UI en el estado por si el nodo lo removió
+            if ui is not None:
+                state["__ui"] = ui  # type: ignore[index]
             if ui:
                 ui.fail(node_id, str(e))
             _snapshot_safe(state["run_id"], f"state_after_{node_id}_error", state)
@@ -146,9 +133,6 @@ def _wrap_node(node_id: str, impl: str, params: Dict[str, Any]):
     return _runner
 
 
-# ---------------------------------------------------------------------
-# Build del grafo desde playbook
-# ---------------------------------------------------------------------
 def build_graph_from_playbook(playbook_name: str, target: str):
     pb = load_playbook(playbook_name)
     nodes = pb.get("nodes", [])
@@ -170,15 +154,10 @@ def build_graph_from_playbook(playbook_name: str, target: str):
             raise ValueError("Cada edge debe ser un objeto con claves 'from' y 'to'.")
         g.add_edge(e["from"], e["to"])
 
-    # Asegurar END por si el playbook no lo añade
     g.add_edge(nodes[-1]["id"], END)
-
     return g.compile()
 
 
-# ---------------------------------------------------------------------
-# Estado inicial
-# ---------------------------------------------------------------------
 def init_state(target: str) -> RFState:
     return RFState(
         run_id=new_run_id(),
