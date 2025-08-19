@@ -46,6 +46,32 @@ def _echo_kv(k: str, v: str):
     typer.echo(typer.style(k + ": ", bold=True) + v)
 
 
+# ------- núcleo de verificación (usable desde CLI y desde código) -------
+
+
+def _check_impl(extra: Optional[List[str]] = None) -> None:
+    """Verifica que las herramientas de terceros estén en PATH (usable desde código)."""
+    import shutil
+
+    req = {v for v in TOOLS.values() if v}
+    if extra:
+        req |= set(extra)
+
+    missing: List[str] = []
+    typer.echo("Verificando herramientas en PATH:")
+    for name in sorted(req):
+        path = shutil.which(name)
+        if path:
+            typer.echo(f"  ✓ {name}  ->  {path}")
+        else:
+            typer.echo(f"  ✗ {name}  (no encontrado)")
+            missing.append(name)
+
+    if missing:
+        typer.echo("\nFaltan herramientas. Instálalas o ajusta tu PATH.")
+        raise typer.Exit(code=2)
+
+
 # ------- comandos -------
 
 
@@ -65,33 +91,15 @@ def list_playbooks() -> None:
         typer.echo(f"  - {f}")
 
 
-@app.command()
+@app.command(name="check")
 def check(
     extra: Optional[List[str]] = typer.Option(
         None,
         help="Nombres adicionales de binarios a verificar (además de TOOLS).",
     )
 ) -> None:
-    """Verifica que las herramientas de terceros estén en PATH."""
-    import shutil
-
-    req = set([v for v in TOOLS.values() if v])
-    if extra:
-        req |= set(extra)
-
-    missing = []
-    typer.echo("Verificando herramientas en PATH:")
-    for name in sorted(req):
-        path = shutil.which(name)
-        if path:
-            typer.echo(f"  ✓ {name}  ->  {path}")
-        else:
-            typer.echo(f"  ✗ {name}  (no encontrado)")
-            missing.append(name)
-
-    if missing:
-        typer.echo("\nFaltan herramientas. Instálalas o ajusta tu PATH.")
-        raise typer.Exit(code=2)
+    """Verifica que las herramientas de terceros estén en PATH (CLI)."""
+    _check_impl(extra)
 
 
 @app.command()
@@ -125,16 +133,9 @@ def run(
     """
     _validate_target(target)
 
-    # Ejecuta el comando 'check' directamente con sus defaults (sin usar .callback)
+    # Llamada interna segura (evita OptionInfo de Typer)
     if check_tools:
-        try:
-            check()
-        except typer.Exit as e:
-            # Propaga tal cual el código de salida
-            raise
-        except SystemExit as e:
-            # Normaliza SystemExit a Typer Exit
-            raise typer.Exit(code=e.code)
+        _check_impl()
 
     # Estado inicial
     state = init_state(target)
