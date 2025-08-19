@@ -80,7 +80,7 @@ class PipelineUI:
                 elapsed = str(end - start).split(".")[0]  # hh:mm:ss
             badge = {
                 "pending": "⌛ pending",
-                "running": "⏳ running",
+                "running": "⏳ running...",
                 "ok": "✅ ok",
                 "error": "❌ error",
                 "skipped": "⤼ skipped",
@@ -105,3 +105,4 @@ class PipelineUI:
         if self._live:
             # update desde el MISMO hilo que creó el Live (main thread)
             self._live.update(self.render())
+
