@@ -162,8 +162,14 @@ async def run(state: Dict[str, Any], gowitness_threads: int = 3) -> Dict[str, An
     target_file = urls_for_screens if urls_for_screens.exists() else subs_alive
     cmd_gw = f'{TOOLS.get("gowitness","gowitness")} file -f "{target_file}" -P "{screens_dir}" --threads {gowitness_threads}'
     res_gw = await run_cmd(cmd_gw, timeout=TIMEOUTS.get("gowitness", 1800))
-    if res_gw.code != 0:
-        state.setdefault("errors", []).append({"node":"gowitness","stderr":res_gw.stderr or "failed"})
-    state["screenshots_dir"] = str(screens_dir)
 
+    # si falló pero hubo PNGs, lo damos por bueno (gowitness a veces retorna !=0 por URLs caídas)
+    pngs = list(screens_dir.glob("*.png"))
+    if res_gw.code != 0 and not pngs:
+        state.setdefault("errors", []).append({"node":"gowitness","stderr":res_gw.stderr or "failed"})
+    elif res_gw.stderr:
+        # guarda log para diagnóstico
+        append_artifact(state["run_id"], "gowitness_stderr.txt", res_gw.stderr)
+
+    state["screenshots_dir"] = str(screens_dir)
     return state
