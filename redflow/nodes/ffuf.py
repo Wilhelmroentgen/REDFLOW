@@ -10,7 +10,7 @@ from ..settings import (
     HTTPX_PRIORITY_CODES, PRIORITY_PORTS_WEB
 )
 
-def _pick_targets(state: Dict[str, Any], limit: int = 30) -> List[str]:
+def _pick_targets(state: Dict[str, Any], limit: int = 15) -> List[str]:
     pri: List[str] = []
     seen = set()
 
@@ -22,18 +22,15 @@ def _pick_targets(state: Dict[str, Any], limit: int = 30) -> List[str]:
             if base not in seen:
                 pri.append(url); seen.add(base)
 
-    ports = state.get("ports") or {}
-    for host, plist in ports.items():
+    for host, plist in (state.get("ports") or {}).items():
         if any(p in PRIORITY_PORTS_WEB for p in plist):
-            base = host
-            if base not in seen:
-                pri.append(f"https://{host}".rstrip("/")); seen.add(base)
+            if host not in seen:
+                pri.append(f"https://{host}".rstrip("/")); seen.add(host)
 
     if not pri:
         for h in (state.get("alive_hosts") or [])[:limit]:
-            base = h
-            if base not in seen:
-                pri.append(f"https://{h}".rstrip("/")); seen.add(base)
+            if h not in seen:
+                pri.append(f"https://{h}".rstrip("/")); seen.add(h)
 
     return pri[:limit]
 
@@ -45,8 +42,10 @@ async def run(
     filter_size: int = 0,
     per_host_minutes: int = 5,
     max_hosts: int = 15,
-    request_timeout: int = 5,   # timeout por request (ffuf -timeout). No confundir con TIMEOUTS global
-    rate: int = 0                # throttling opcional (req/s). 0 = sin límite
+    request_timeout: int = 5,     # -timeout por request en ffuf
+    rate: int = 0,                # -rate opcional
+    follow_redirects: bool = True,  # nuevo/compatible
+    **_: Any,                     # ignora params desconocidos
 ) -> Dict[str, Any]:
     rdir = run_dir(state["run_id"])
     art = rdir / "artifacts"
@@ -54,7 +53,6 @@ async def run(
     flags = state.get("flags", {})
     resume = bool(flags.get("resume"))
     force = bool(flags.get("force"))
-
     if resume and not force:
         return state
 
@@ -67,12 +65,16 @@ async def run(
     for base_url in targets:
         safe = urllib.parse.quote(base_url, "")
         out_json = art / f"ffuf_{safe}.json"
+
+        fr_flag = "-fr" if follow_redirects else ""
         rate_flag = f"-rate {rate}" if rate and rate > 0 else ""
+
         cmd = (
             f'{TOOLS.get("ffuf","ffuf")} -w "{wordlist}" -u "{base_url}/FUZZ" '
-            f'-t {threads} -mc {match_codes} -fs {filter_size} -timeout {request_timeout} -ac {rate_flag} '
+            f'-t {threads} -mc {match_codes} -fs {filter_size} -timeout {request_timeout} -ac {fr_flag} {rate_flag} '
             f'-json -o "{out_json}"'
-        )
+        ).strip()
+
         timeout = min(TIMEOUTS.get("ffuf", 600), per_host_minutes * 60)
         res = await run_cmd(cmd, timeout=timeout)
         if res.code != 0:
