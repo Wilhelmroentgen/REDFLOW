@@ -66,17 +66,25 @@ nodes:
     params:
       katana_depth: 2
       dedupe: true
+      max_urls: 400
+      per_host_max: 50
+      arjun_threads: 10
+      arjun_req_timeout: 10
+      arjun_budget: 480
 
   # 7) Directory fuzzing (prioritized)
   - id: ffuf
     impl: ffuf
     params:
-      wordlist: "/usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-directories.txt"
-      threads: 20
+      wordlist: "/usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-directories.txt"
+      threads: 30
       match_codes: "200,204,301,302,401,403"
       filter_size: 0
-      per_host_minutes: 10
+      per_host_minutes: 5
       max_hosts: 30
+      request_timeout: 5
+      follow_redirects: true
+      aggressive: false
 
   # 8) TLS / certificates
   - id: tls_meta
