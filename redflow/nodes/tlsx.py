@@ -28,7 +28,7 @@ def _parse_tlsx_jsonl(txt: str) -> List[Dict[str, Any]]:
             continue
     return out
 
-async def run(state: Dict[str, Any]) -> Dict[str, Any]:
+async def run(state: Dict[str, Any], **_: Any) -> Dict[str, Any]:
     rdir = run_dir(state["run_id"])
     art = rdir / "artifacts"
     subs_alive = art / "subs_alive.txt"
@@ -38,9 +38,8 @@ async def run(state: Dict[str, Any]) -> Dict[str, Any]:
     force = bool(flags.get("force"))
 
     out_jsonl = art / "tls_meta.jsonl"
-    out_txt = art / "tls_meta.txt"
 
-    def _append_and_parse(stdout: str):
+    def _consume(stdout: str):
         append_artifact(state["run_id"], "tls_meta.jsonl", stdout)
         parsed = _parse_tlsx_jsonl(stdout)
         lines = []
@@ -52,36 +51,38 @@ async def run(state: Dict[str, Any]) -> Dict[str, Any]:
         append_artifact(state["run_id"], "tls_meta.txt", "\n".join(lines) + ("\n" if lines else ""))
         state["tls"] = (state.get("tls") or []) + parsed
 
-    # Reusar
     if resume and not force and out_jsonl.exists():
-        _append_and_parse(out_jsonl.read_text(encoding="utf-8", errors="ignore"))
+        _consume(out_jsonl.read_text(encoding="utf-8", errors="ignore"))
         return state
 
-    # Modo lista
-    stdout_all = ""
-    if subs_alive.exists():
+    # filtra hosts que realmente tengan https (según httpx/urls)
+    https_hosts: List[str] = []
+    for it in (state.get("httpx") or []):
+        u = (it.get("url") or "").strip().lower()
+        if u.startswith("https://"):
+            host = u.split("://",1)[1].split("/",1)[0]
+            https_hosts.append(host)
+
+    # fallback si no hay httpx: usa subs_alive pero no marques error si no hay salida
+    use_list_file = False
+    if https_hosts:
+        payload = "\n".join(sorted(set(https_hosts)))
+        cmd = f'echo "{payload}" | {TOOLS.get("tlsx","tlsx")} -san -cn -issuer -version -alpn -silent -json'
+        res = await run_cmd(cmd, timeout=TIMEOUTS.get("tlsx", 900))
+        if res.code == 0 and res.stdout:
+            _consume(res.stdout)
+            return state
+    elif subs_alive.exists():
+        use_list_file = True
+
+    if use_list_file:
         cmd = f'{TOOLS.get("tlsx","tlsx")} -l "{subs_alive}" -san -cn -issuer -version -alpn -silent -json'
         res = await run_cmd(cmd, timeout=TIMEOUTS.get("tlsx", 900))
         if res.code == 0 and res.stdout:
-            stdout_all = res.stdout
-
-    # Fallback por host si el batch devolvió vacío
-    if not stdout_all:
-        hosts = state.get("alive_hosts") or []
-        if not hosts:
+            _consume(res.stdout)
             return state
-        chunk = hosts[:200]  # límite de cortesía
-        outputs = []
-        for h in chunk:
-            cmd = f'{TOOLS.get("tlsx","tlsx")} -u "{h}" -san -cn -issuer -version -alpn -silent -json'
-            res = await run_cmd(cmd, timeout=30)
-            if res.code == 0 and res.stdout:
-                outputs.append(res.stdout)
-        stdout_all = "\n".join(outputs)
-
-    if not stdout_all:
-        state.setdefault("errors", []).append({"node":"tlsx","stderr":"empty_output"})
+        # sin TLS real: no lo tratamos como error “duro”
         return state
 
-    _append_and_parse(stdout_all)
+    # sin https hosts: no es error
     return state
