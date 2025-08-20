@@ -1,15 +1,26 @@
+# redflow/nodes/urls_params.py
 from __future__ import annotations
 from typing import Dict, Any, List
 from pathlib import Path
+from urllib.parse import urlparse
 
 from ..utils.shell import run_cmd
-from ..utils.io import append_artifact, run_dir
+from ..utils.io import run_dir, append_artifact
 from ..settings import TOOLS, TIMEOUTS, KATANA_DEPTH
+
+def _read_lines(p: Path) -> List[str]:
+    if not p.exists(): return []
+    return [x.strip() for x in p.read_text(encoding="utf-8", errors="ignore").splitlines() if x.strip()]
 
 async def run(
     state: Dict[str, Any],
     katana_depth: int = KATANA_DEPTH,
-    dedupe: bool = True
+    dedupe: bool = True,
+    max_urls: int = 200,        # cap global
+    per_host_max: int = 25,     # cap por host
+    arjun_threads: int = 10,
+    arjun_req_timeout: int = 10,
+    arjun_budget: int = 480,    # budget global en segundos
 ) -> Dict[str, Any]:
     rdir = run_dir(state["run_id"])
     art = rdir / "artifacts"
@@ -24,19 +35,13 @@ async def run(
     urls_total = art / "urls_total.txt"
     params_txt = art / "params.txt"
 
-    # Resume rápido
     if resume and not force and urls_total.exists():
-        lines = [l.strip() for l in urls_total.read_text(encoding="utf-8", errors="ignore").splitlines() if l.strip()]
-        state["urls"] = sorted(set((state.get("urls") or []) + lines))
-        if params_txt.exists():
-            # no parseamos profundo params de arjun (texto plano)
-            pass
+        state["urls"] = _read_lines(urls_total)
         return state
 
-    # Entradas
     targets: List[str] = []
     if subs_alive.exists():
-        targets = [l.strip() for l in subs_alive.read_text(encoding="utf-8", errors="ignore").splitlines() if l.strip()]
+        targets = _read_lines(subs_alive)
     elif state.get("alive_hosts"):
         targets = list(state["alive_hosts"])
     elif state.get("target"):
@@ -45,42 +50,48 @@ async def run(
     if not targets:
         return state
 
+    # GAU
     payload = "\n".join(targets).replace('"', '\\"')
-
-    # gau --subs
-    cmd_gau = f'echo "{payload}" | {TOOLS.get("gau","gau")} --subs'
-    res_gau = await run_cmd(cmd_gau, timeout=TIMEOUTS.get("gau", 1200))
+    res_gau = await run_cmd(f'echo "{payload}" | {TOOLS.get("gau","gau")} --subs', timeout=TIMEOUTS.get("gau", 240))
     if res_gau.code == 0 and res_gau.stdout:
-        append_artifact(state["run_id"], "urls_historicas.txt", res_gau.stdout)
+        urls_hist.write_text(res_gau.stdout, encoding="utf-8")
     else:
         state.setdefault("errors", []).append({"node":"urls_params","tool":"gau","stderr":res_gau.stderr or "empty"})
 
-    # katana -list
+    # Katana
     tf = art / "subs_alive.txt"
-    cmd_katana = f'{TOOLS.get("katana","katana")} -list "{tf}" -d {katana_depth} -silent'
-    res_katana = await run_cmd(cmd_katana, timeout=TIMEOUTS.get("katana", 1200))
+    res_katana = await run_cmd(f'{TOOLS.get("katana","katana")} -list "{tf}" -d {katana_depth} -silent', timeout=TIMEOUTS.get("katana", 240))
     if res_katana.code == 0 and res_katana.stdout:
-        append_artifact(state["run_id"], "urls_crawl.txt", res_katana.stdout)
+        urls_crawl.write_text(res_katana.stdout, encoding="utf-8")
     else:
         state.setdefault("errors", []).append({"node":"urls_params","tool":"katana","stderr":res_katana.stderr or "empty"})
 
-    # Merge & dedupe
-    all_urls = []
-    if res_gau.stdout:
-        all_urls.extend([l.strip() for l in res_gau.stdout.splitlines() if l.strip()])
-    if res_katana.stdout:
-        all_urls.extend([l.strip() for l in res_katana.stdout.splitlines() if l.strip()])
-
+    # Merge + caps
+    all_urls = _read_lines(urls_hist) + _read_lines(urls_crawl)
     if dedupe:
         all_urls = sorted(set(all_urls))
-    append_artifact(state["run_id"], "urls_total.txt", "\n".join(all_urls) + ("\n" if all_urls else ""))
+    # cap por host
+    per_host = {}
+    filtered = []
+    for u in all_urls:
+        if len(filtered) >= max_urls: break
+        host = urlparse(u).netloc.lower()
+        per_host[host] = per_host.get(host, 0) + 1
+        if per_host[host] <= per_host_max:
+            filtered.append(u)
 
-    state["urls"] = sorted(set((state.get("urls") or []) + all_urls))
+    urls_total.write_text("\n".join(filtered) + ("\n" if filtered else ""), encoding="utf-8")
+    state["urls"] = filtered
 
-    # arjun -i urls_total.txt
-    if all_urls:
-        cmd_arjun = f'{TOOLS.get("arjun","arjun")} -i "{urls_total}" -oT "{params_txt}"'
-        res_arjun = await run_cmd(cmd_arjun, timeout=TIMEOUTS.get("arjun", 1800))
-        if res_arjun.code != 0:
-            state.setdefault("errors", []).append({"node":"urls_params","tool":"arjun","stderr":res_arjun.stderr or "failed"})
+    # ARJUN con budget global (nuestro run_cmd impone timeout total)
+    if not filtered:
+        return state
+
+    cmd_arjun = (
+        f'{TOOLS.get("arjun","arjun")} -i "{urls_total}" '
+        f'-t {arjun_threads} --timeout {arjun_req_timeout} -oT "{params_txt}"'
+    )
+    res_arjun = await run_cmd(cmd_arjun, timeout=min(TIMEOUTS.get("arjun", 600), arjun_budget))
+    if res_arjun.code != 0:
+        state.setdefault("errors", []).append({"node":"urls_params","tool":"arjun","stderr":res_arjun.stderr or "timeout"})
     return state
